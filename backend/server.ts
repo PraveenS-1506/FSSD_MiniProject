@@ -1,157 +1,121 @@
 import express, { Request, Response } from "express";
 import cors from "cors";
 import generateSchedule from "./scheduler";
+import pool, { initDB } from "./db";
 
 const app = express();
-const PORT = 3000;
+const PORT = 5000;
 
 app.use(cors());
 app.use(express.json());
 
-type Task = {
-  title: string;
-  hours: number;
-  deadline: string;
-};
-
-type Slot = {
-  dailyHours: number;
-  startDate: string;
-};
-
-let tasks: Task[] = [];
-let slots: Slot[] = [];
-
-// Helper: Validate date format (YYYY-MM-DD)
-const isValidDate = (dateString: string): boolean => {
+const isValidDate = (d: string) => {
   const regex = /^\d{4}-\d{2}-\d{2}$/;
-  if (!regex.test(dateString)) return false;
-  const date = new Date(dateString);
-  return date instanceof Date && !isNaN(date.getTime());
+  if (!regex.test(d)) return false;
+  return !isNaN(new Date(d).getTime());
 };
 
-// POST /tasks - store task
-app.post("/tasks", (req: Request, res: Response) => {
+app.post("/tasks", async (req: Request, res: Response) => {
   try {
     const { title, hours, deadline } = req.body;
-    
-    // Validation
-    if (!title || typeof title !== "string" || title.trim() === "") {
-      console.log("[ERROR] Task title is required");
+    if (!title || typeof title !== "string" || title.trim() === "")
       return res.status(400).json({ error: "Task title is required and must be a non-empty string" });
-    }
-    
-    if (!hours || typeof hours !== "number" || hours <= 0) {
-      console.log("[ERROR] Invalid hours value:", hours);
+    if (!hours || typeof hours !== "number" || hours <= 0)
       return res.status(400).json({ error: "Hours must be a positive number" });
-    }
-    
-    if (!deadline || !isValidDate(deadline)) {
-      console.log("[ERROR] Invalid deadline:", deadline);
+    if (!deadline || !isValidDate(deadline))
       return res.status(400).json({ error: "Deadline must be a valid date in YYYY-MM-DD format" });
-    }
-    
-    const task: Task = { title: title.trim(), hours, deadline };
-    tasks.push(task);
-    console.log("[SUCCESS] Task added:", task);
-    res.status(201).json({ message: "Task added successfully", data: task });
+
+    const result = await pool.query(
+      "INSERT INTO tasks (title, hours, deadline) VALUES ($1, $2, $3) RETURNING *",
+      [title.trim(), hours, deadline]
+    );
+    res.status(201).json({ message: "Task added successfully", data: result.rows[0] });
   } catch (error) {
-    console.error("[ERROR] Failed to add task:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /tasks - return tasks
-app.get("/tasks", (req: Request, res: Response) => {
+app.get("/tasks", async (req: Request, res: Response) => {
   try {
-    console.log(`[INFO] Fetching tasks. Total: ${tasks.length}`);
-    if (tasks.length === 0) {
-      return res.json({ message: "No tasks found", data: [] });
-    }
-    res.json({ message: "Tasks retrieved successfully", data: tasks });
+    const result = await pool.query("SELECT * FROM tasks ORDER BY id");
+    res.json({ message: "Tasks retrieved successfully", data: result.rows });
   } catch (error) {
-    console.error("[ERROR] Failed to fetch tasks:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// POST /slots - store study slots
-app.post("/slots", (req: Request, res: Response) => {
+app.delete("/tasks/:id", async (req: Request, res: Response) => {
+  try {
+    const { id } = req.params;
+    const result = await pool.query("DELETE FROM tasks WHERE id = $1 RETURNING *", [id]);
+    if (result.rows.length === 0)
+      return res.status(404).json({ error: "Task not found" });
+    res.json({ message: "Task deleted successfully" });
+  } catch (error) {
+    res.status(500).json({ error: "Internal server error" });
+  }
+});
+
+app.post("/slots", async (req: Request, res: Response) => {
   try {
     const { dailyHours, startDate } = req.body;
-    
-    // Validation
-    if (!dailyHours || typeof dailyHours !== "number" || dailyHours <= 0) {
-      console.log("[ERROR] Invalid dailyHours:", dailyHours);
+    if (!dailyHours || typeof dailyHours !== "number" || dailyHours <= 0)
       return res.status(400).json({ error: "Daily hours must be a positive number" });
-    }
-    
-    if (!startDate || !isValidDate(startDate)) {
-      console.log("[ERROR] Invalid startDate:", startDate);
+    if (!startDate || !isValidDate(startDate))
       return res.status(400).json({ error: "Start date must be a valid date in YYYY-MM-DD format" });
-    }
-    
-    const slot: Slot = { dailyHours, startDate };
-    slots.push(slot);
-    console.log("[SUCCESS] Slot added:", slot);
-    res.status(201).json({ message: "Slot added successfully", data: slot });
+
+    const result = await pool.query(
+      "INSERT INTO slots (daily_hours, start_date) VALUES ($1, $2) RETURNING *",
+      [dailyHours, startDate]
+    );
+    res.status(201).json({ message: "Slot added successfully", data: result.rows[0] });
   } catch (error) {
-    console.error("[ERROR] Failed to add slot:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /slots - return slots
-app.get("/slots", (req: Request, res: Response) => {
+app.get("/slots", async (req: Request, res: Response) => {
   try {
-    console.log(`[INFO] Fetching slots. Total: ${slots.length}`);
-    if (slots.length === 0) {
-      return res.json({ message: "No slots found", data: [] });
-    }
-    res.json({ message: "Slots retrieved successfully", data: slots });
+    const result = await pool.query("SELECT * FROM slots ORDER BY id");
+    res.json({ message: "Slots retrieved successfully", data: result.rows });
   } catch (error) {
-    console.error("[ERROR] Failed to fetch slots:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
 
-// GET /schedule - call scheduler function and return result
-app.get("/schedule", (req: Request, res: Response) => {
+app.get("/schedule", async (req: Request, res: Response) => {
   try {
-    console.log("[INFO] Generating schedule...");
-    
-    if (tasks.length === 0) {
-      console.log("[ERROR] No tasks available for scheduling");
-      return res.status(400).json({ error: "No tasks available. Please add tasks first using POST /tasks" });
-    }
-    
-    if (slots.length === 0) {
-      console.log("[ERROR] No slots configured");
-      return res.status(400).json({ error: "No slots configured. Please add a slot using POST /slots" });
-    }
-    
-    const latestSlot = slots[slots.length - 1];
-    console.log("[INFO] Using slot:", latestSlot);
-    console.log("[INFO] Processing tasks:", tasks.length);
-    
-    const result = generateSchedule(tasks, latestSlot.dailyHours, latestSlot.startDate);
-    
-    // Check if scheduler returned an error
-    if (result && typeof result === "object" && "error" in result) {
-      console.log("[ERROR] Scheduler error:", result.error);
-      return res.status(400).json({ error: result.error });
-    }
-    
-    console.log("[SUCCESS] Schedule generated successfully");
-    res.json({ message: "Schedule generated successfully", data: result });
+    const tasksResult = await pool.query("SELECT * FROM tasks ORDER BY id");
+    const slotsResult = await pool.query("SELECT * FROM slots ORDER BY id DESC LIMIT 1");
+
+    if (tasksResult.rows.length === 0)
+      return res.status(400).json({ error: "No tasks available. Please add tasks first." });
+    if (slotsResult.rows.length === 0)
+      return res.status(400).json({ error: "No slots configured. Please add a slot first." });
+
+    const tasks = tasksResult.rows.map(r => ({
+      title: r.title,
+      hours: Number(r.hours),
+      deadline: r.deadline.toISOString().split("T")[0],
+    }));
+
+    const latestSlot = slotsResult.rows[0];
+    const { schedule, skipped } = generateSchedule(
+      tasks,
+      Number(latestSlot.daily_hours),
+      latestSlot.start_date.toISOString().split("T")[0]
+    );
+
+    res.json({ message: "Schedule generated successfully", data: schedule, skipped });
   } catch (error) {
-    console.error("[ERROR] Failed to generate schedule:", error);
     res.status(500).json({ error: "Internal server error while generating schedule" });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`\n========================================`);
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-  console.log(`========================================\n`);
+initDB().then(() => {
+  app.listen(PORT, () => {
+    console.log(`\n========================================`);
+    console.log(`🚀 Server running on http://localhost:${PORT}`);
+    console.log(`========================================\n`);
+  });
 });
