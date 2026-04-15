@@ -10,7 +10,7 @@ type ScheduleItem = {
   hours: number;
 };
 
-type ScheduleResult = ScheduleItem[] | { error: string };
+type ScheduleResult = { schedule: ScheduleItem[]; skipped: string[] };
 
 function generateSchedule(
   tasks: Task[],
@@ -18,39 +18,45 @@ function generateSchedule(
   startDate: string
 ): ScheduleResult {
   let schedule: ScheduleItem[] = [];
+  let skipped: string[] = [];
   let currentDate = new Date(startDate);
+  let hoursLeftToday = dailyHours;
 
-  // sort tasks by deadline
-  tasks.sort(
-    (a, b) =>
-      new Date(a.deadline).getTime() - new Date(b.deadline).getTime()
-  );
+  tasks.sort((a, b) => new Date(a.deadline).getTime() - new Date(b.deadline).getTime());
 
   for (let task of tasks) {
     let remaining = task.hours;
+    const savedDate = new Date(currentDate);
+    const savedHoursLeft = hoursLeftToday;
+    const savedScheduleLen = schedule.length;
 
+    let fits = true;
     while (remaining > 0) {
-      // deadline check
-      if (currentDate > new Date(task.deadline)) {
-        return { error: `Not enough time for ${task.title}` };
+      if (currentDate >= new Date(task.deadline)) {
+        fits = false;
+        break;
       }
 
-      const hoursToday = Math.min(dailyHours, remaining);
-
-      schedule.push({
-        date: currentDate.toDateString(),
-        task: task.title,
-        hours: hoursToday,
-      });
-
+      const hoursToday = Math.min(hoursLeftToday, remaining);
+      schedule.push({ date: currentDate.toDateString(), task: task.title, hours: hoursToday });
       remaining -= hoursToday;
+      hoursLeftToday -= hoursToday;
 
-      // move to next day
-      currentDate.setDate(currentDate.getDate() + 1);
+      if (hoursLeftToday === 0) {
+        currentDate.setDate(currentDate.getDate() + 1);
+        hoursLeftToday = dailyHours;
+      }
+    }
+
+    if (!fits) {
+      schedule = schedule.slice(0, savedScheduleLen);
+      currentDate = savedDate;
+      hoursLeftToday = savedHoursLeft;
+      skipped.push(task.title);
     }
   }
 
-  return schedule;
+  return { schedule, skipped };
 }
 
 export default generateSchedule;

@@ -1,0 +1,31 @@
+version: "3.8"
+
+services:
+  db:
+    image: postgres:15
+    restart: always
+    environment:
+      POSTGRES_USER: fssd
+      POSTGRES_PASSWORD: fssd123
+      POSTGRES_DB: scheduler
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  backend:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      DB_HOST: db
+      DB_USER: fssd
+      DB_PASSWORD: fssd123
+      DB_NAME: scheduler
+      DB_PORT: 5432
+    depends_on:
+      - db
+    command: npx ts-node backend/server.ts
+
+volumes:
+  pgdata:
